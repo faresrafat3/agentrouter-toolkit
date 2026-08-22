@@ -4,6 +4,7 @@ After=graphical-session.target
 
 [Service]
 Type=oneshot
-ExecStart=%h/.hermes/skills/software-development/agentrouter-task-orchestration/scripts/agentrouter-guard.sh
+# rewritten by install.sh to the absolute product path
+ExecStart=__PRODUCT_ROOT__/scripts/agentrouter-guard.sh
 # Guard must never fail loudly into the user session; it logs to guard.log
 SuccessExitStatus=0 1
