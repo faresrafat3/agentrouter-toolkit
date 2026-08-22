@@ -225,7 +225,12 @@ def _maybe_dump_agentrouter_payload(
         ins = idx + len(DUMPER_ANCHOR)
         helpers = helpers[:ins] + "\n" + dumper + helpers[ins:]
         changed.append("helpers:dumper")
-    if not re.search(r"def _dispatch_nonstreaming_api_request.*?sanitize_for_agentrouter\(api_kwargs", helpers, re.DOTALL):
+    dispatch_probe = dict(LAYERS)["dispatch site"]
+    # LAYERS probes read HELPERS from disk; flush the in-memory edits first so
+    # probes see current state and apply() stays idempotent (no re-injection).
+    if changed and any(c.startswith("helpers:") for c in changed):
+        HELPERS.write_text(helpers, encoding="utf-8")
+    if not dispatch_probe():
         ok = replace_first(
             '    this helper only issues the request.\n    """\n',
             '    this helper only issues the request.\n    """\n'
@@ -240,7 +245,10 @@ def _maybe_dump_agentrouter_payload(
         )
         if ok:
             changed.append("helpers:dispatch-site")
-    if not re.search(r"def _open_stream.*?sanitize_for_agentrouter\(", helpers, re.DOTALL):
+        HELPERS.write_text(helpers, encoding="utf-8")
+        helpers = HELPERS.read_text(encoding="utf-8")
+    stream_probe = dict(LAYERS)["stream site"]
+    if not stream_probe():
         ok = replace_first(
             "        def _open_stream(next_api_kwargs: dict[str, Any]):\n",
             "        def _open_stream(next_api_kwargs: dict[str, Any]):\n"
@@ -255,7 +263,10 @@ def _maybe_dump_agentrouter_payload(
         )
         if ok:
             changed.append("helpers:stream-site")
-    if not re.search(r"# Strip all remaining underscore-prefixed.*?sanitize_for_agentrouter\(\s*api_messages", helpers, re.DOTALL):
+        HELPERS.write_text(helpers, encoding="utf-8")
+        helpers = HELPERS.read_text(encoding="utf-8")
+    summary_probe = dict(LAYERS)["summary site"]
+    if not summary_probe():
         anchor = ('                for internal_key in [k for k in api_msg if isinstance(k, str) and k.startswith("_")]:\n'
                   "                    api_msg.pop(internal_key, None)\n")
         idx = helpers.find(anchor)
