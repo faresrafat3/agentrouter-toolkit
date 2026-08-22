@@ -46,7 +46,12 @@ DUMPER_ANCHOR = '_OPENROUTER_PROVIDER_SORT_VALUES = {"throughput", "latency", "p
 # (name, probe) — all must hold for --check to pass.
 LAYERS = [
     ("sanitizer module", lambda: "def sanitize_for_agentrouter(" in SANIT.read_text(encoding="utf-8")),
-    ("helpers import", lambda: "sanitize_for_agentrouter,\n)" in HELPERS.read_text(encoding="utf-8")),
+    # helpers import: matches BOTH the legacy plain import and the hardened
+    # try/except form (which is what current restores inject).
+    ("helpers import", lambda: (
+        "sanitize_for_agentrouter,\n)" in HELPERS.read_text(encoding="utf-8")
+        or "except ImportError:" in HELPERS.read_text(encoding="utf-8")
+    )),
     ("dumper defined", lambda: "def _maybe_dump_agentrouter_payload(" in HELPERS.read_text(encoding="utf-8")),
     ("dispatch site", lambda: re.search(r"def _dispatch_nonstreaming_api_request.*?_maybe_dump_agentrouter_payload\(.*?sanitize_for_agentrouter\(", HELPERS.read_text(encoding="utf-8"), re.DOTALL)),
     ("stream site", lambda: re.search(r"def _open_stream.*?sanitize_for_agentrouter\(", HELPERS.read_text(encoding="utf-8"), re.DOTALL)),
@@ -224,7 +229,7 @@ def _maybe_dump_agentrouter_payload(
             '        "dispatch", api_kwargs, getattr(agent, "provider", ""),\n'
             '        getattr(agent, "base_url", "") or "",\n'
             '    )\n'
-            "    api_kwargs = sanitize_for_agentrouter(\n"
+            "    api_kwargs = _sanitize_if_available(\n"
             '        api_kwargs, getattr(agent, "provider", ""),\n'
             '        base_url=getattr(agent, "base_url", "") or "",\n'
             "    )\n",
@@ -239,7 +244,7 @@ def _maybe_dump_agentrouter_payload(
             '                "stream", next_api_kwargs, getattr(agent, "provider", ""),\n'
             '                getattr(agent, "base_url", "") or "",\n'
             '            )\n'
-            "            next_api_kwargs = sanitize_for_agentrouter(\n"
+            "            next_api_kwargs = _sanitize_if_available(\n"
             '                next_api_kwargs, getattr(agent, "provider", ""),\n'
             '                base_url=getattr(agent, "base_url", "") or "",\n'
             "            )\n",
@@ -265,7 +270,7 @@ def _maybe_dump_agentrouter_payload(
             "        # wrap the message LIST in a kwargs dict: sanitize_for_agentrouter\n"
             "        # expects the request-kwargs shape and mutates messages in place.\n"
             "        _summary_kwargs = {\"messages\": api_messages}\n"
-            "        sanitize_for_agentrouter(\n"
+            "        _sanitize_if_available(\n"
             '            _summary_kwargs, getattr(agent, "provider", ""),\n'
             '            base_url=getattr(agent, "base_url", "") or "",\n'
             "        )\n"
