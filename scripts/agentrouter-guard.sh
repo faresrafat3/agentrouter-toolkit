@@ -87,7 +87,7 @@ fi
 #    Set GUARD_NO_PING=1 to suppress (used by tests).
 if command -v hermes >/dev/null 2>&1 && [ "${GUARD_NO_PING:-0}" != "1" ]; then
     (
-        HERMES_HOME="$HOME/.hermes/profiles/system-maneger" timeout 150 \
+        HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}" timeout 150 \
         hermes chat --in ~ -c "Bot Chat" --create-if-missing -Q -q "System note from the agentrouter guard: an update wiped the agentrouter compatibility layers from the shared codebase and I just restored them automatically. If your session was mid-request when this happened it may have failed once; retry it now. No action needed from you beyond a retry if something looked stuck."
     ) >> "$LOG" 2>&1 &
     log "notified system-maneger profile"

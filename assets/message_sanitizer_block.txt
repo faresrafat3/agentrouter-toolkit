@@ -130,10 +130,18 @@ def sanitize_for_agentrouter(
     # ALSO match by destination: sessions restored from older state may still
     # carry provider="custom" (legacy registration) while pointing at
     # agentrouter.org — the filters key off the WIRE TARGET, not the label.
+    # Accept either a request-kwargs dict or a bare message list (some call
+    # sites hand us `api_messages` directly); normalize to dict form so the
+    # walk below always works.
+    as_list = isinstance(api_kwargs, list)
+    if as_list:
+        original_list = api_kwargs  # returned untouched on the no-op path
+        api_kwargs = {"messages": api_kwargs}
+
     if not _is_agentrouter_target(
         provider, base_url or api_kwargs.get("base_url", "")
     ):
-        return api_kwargs
+        return original_list if as_list else api_kwargs
 
     if isinstance(api_kwargs.get("system"), str):
         api_kwargs["system"] = _defang_sensitive_words(api_kwargs["system"])
@@ -148,4 +156,4 @@ def sanitize_for_agentrouter(
             for part in content:
                 if isinstance(part, dict) and isinstance(part.get("text"), str):
                     part["text"] = _defang_sensitive_words(part["text"])
-    return api_kwargs
+    return api_kwargs.get("messages") if as_list else api_kwargs

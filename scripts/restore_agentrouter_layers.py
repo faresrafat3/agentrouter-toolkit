@@ -50,7 +50,11 @@ LAYERS = [
     ("dumper defined", lambda: "def _maybe_dump_agentrouter_payload(" in HELPERS.read_text(encoding="utf-8")),
     ("dispatch site", lambda: re.search(r"def _dispatch_nonstreaming_api_request.*?_maybe_dump_agentrouter_payload\(.*?sanitize_for_agentrouter\(", HELPERS.read_text(encoding="utf-8"), re.DOTALL)),
     ("stream site", lambda: re.search(r"def _open_stream.*?sanitize_for_agentrouter\(", HELPERS.read_text(encoding="utf-8"), re.DOTALL)),
-    ("summary site", lambda: re.search(r"# Strip all remaining underscore-prefixed.*?sanitize_for_agentrouter\(\s*api_messages", HELPERS.read_text(encoding="utf-8"), re.DOTALL)),
+    # summary site: accepts either the legacy direct-list call or the newer
+    # wrapped-dict form (_summary_kwargs) — both are valid restorations.
+    ("summary site", lambda: re.search(
+        r"# Strip all remaining underscore-prefixed.*?(sanitize_for_agentrouter\(\s*api_messages|_summary_kwargs\[.messages.\])",
+        HELPERS.read_text(encoding="utf-8"), re.DOTALL)),
     ("null-chunk guard", lambda: re.search(r"def _iter_provider_stream_chunks.*?if chunk is None:", HELPERS.read_text(encoding="utf-8"), re.DOTALL)),
     ("regression tests", lambda: TEST_NULL.exists() and "_iter_provider_stream_chunks" in TEST_NULL.read_text(encoding="utf-8")),
 ]
@@ -136,7 +140,8 @@ def apply() -> int:
                     if block:
                         print(f"  sanitizer block <- {spec}")
                         break
-        assert block, "no source carried the sanitizer block"
+        if not block:
+            raise RuntimeError("no source carried the sanitizer block — cannot restore")
         sanit = sanit.rstrip() + "\n\n\n" + block
         m = re.search(r"__all__\s*=\s*\[(.*?)\]", sanit, re.DOTALL)
         if m and '"sanitize_for_agentrouter"' not in m.group(1):
@@ -170,12 +175,16 @@ _AR_DUMP_FLAG = "/tmp/ar_dump_on"
 _AR_DUMP_PATH = "/tmp/ar_payloads.jsonl"
 
 
-def _maybe_dump_agentrouter_payload(tag: str, api_kwargs: dict, provider: str) -> None:
+def _maybe_dump_agentrouter_payload(
+    tag: str, api_kwargs: dict, provider: str, base_url: str = ""
+) -> None:
     """Append an outbound agentrouter payload to /tmp/ar_payloads.jsonl if the dump flag is set."""
     try:
         if not os.path.exists(_AR_DUMP_FLAG):
             return
-        if not (provider or "").startswith("agentrouter"):
+        from agent.message_sanitization import _is_agentrouter_target
+
+        if not _is_agentrouter_target(provider, base_url):
             return
         import json as _json
         with open(_AR_DUMP_PATH, "a", encoding="utf-8") as fh:
@@ -185,7 +194,8 @@ def _maybe_dump_agentrouter_payload(tag: str, api_kwargs: dict, provider: str) -
         pass
 '''
         idx = helpers.find(DUMPER_ANCHOR)
-        assert idx != -1, "dumper anchor not found"
+        if idx == -1:
+            raise RuntimeError("dumper anchor not found in chat_completion_helpers.py")
         ins = idx + len(DUMPER_ANCHOR)
         helpers = helpers[:ins] + "\n" + dumper + helpers[ins:]
         changed.append("helpers:dumper")
@@ -193,8 +203,14 @@ def _maybe_dump_agentrouter_payload(tag: str, api_kwargs: dict, provider: str) -
         ok = replace_first(
             '    this helper only issues the request.\n    """\n',
             '    this helper only issues the request.\n    """\n'
-            '    _maybe_dump_agentrouter_payload("dispatch", api_kwargs, getattr(agent, "provider", ""))\n'
-            "    api_kwargs = sanitize_for_agentrouter(api_kwargs, getattr(agent, \"provider\", \"\"))\n",
+            '    _maybe_dump_agentrouter_payload(\n'
+            '        "dispatch", api_kwargs, getattr(agent, "provider", ""),\n'
+            '        getattr(agent, "base_url", "") or "",\n'
+            '    )\n'
+            "    api_kwargs = sanitize_for_agentrouter(\n"
+            '        api_kwargs, getattr(agent, "provider", ""),\n'
+            '        base_url=getattr(agent, "base_url", "") or "",\n'
+            "    )\n",
         )
         if ok:
             changed.append("helpers:dispatch-site")
@@ -202,9 +218,13 @@ def _maybe_dump_agentrouter_payload(tag: str, api_kwargs: dict, provider: str) -
         ok = replace_first(
             "        def _open_stream(next_api_kwargs: dict[str, Any]):\n",
             "        def _open_stream(next_api_kwargs: dict[str, Any]):\n"
-            '            _maybe_dump_agentrouter_payload("stream", next_api_kwargs, getattr(agent, "provider", ""))\n'
+            '            _maybe_dump_agentrouter_payload(\n'
+            '                "stream", next_api_kwargs, getattr(agent, "provider", ""),\n'
+            '                getattr(agent, "base_url", "") or "",\n'
+            '            )\n'
             "            next_api_kwargs = sanitize_for_agentrouter(\n"
-            '                next_api_kwargs, getattr(agent, "provider", "")\n'
+            '                next_api_kwargs, getattr(agent, "provider", ""),\n'
+            '                base_url=getattr(agent, "base_url", "") or "",\n'
             "            )\n",
         )
         if ok:
@@ -213,7 +233,8 @@ def _maybe_dump_agentrouter_payload(tag: str, api_kwargs: dict, provider: str) -
         anchor = ('                for internal_key in [k for k in api_msg if isinstance(k, str) and k.startswith("_")]:\n'
                   "                    api_msg.pop(internal_key, None)\n")
         idx = helpers.find(anchor)
-        assert idx != -1, "summary sweep anchor not found"
+        if idx == -1:
+            raise RuntimeError("summary sweep anchor not found in chat_completion_helpers.py")
         ins = idx + len(anchor)
         inject = (
             "\n"
@@ -222,10 +243,16 @@ def _maybe_dump_agentrouter_payload(tag: str, api_kwargs: dict, provider: str) -
             "        _maybe_dump_agentrouter_payload(\n"
             '            "iteration_summary", {"model": agent.model, "messages": api_messages},\n'
             '            getattr(agent, "provider", ""),\n'
+            '            getattr(agent, "base_url", "") or "",\n'
             "        )\n"
-            "        api_messages = sanitize_for_agentrouter(\n"
-            '            api_messages, getattr(agent, "provider", "")\n'
+            "        # wrap the message LIST in a kwargs dict: sanitize_for_agentrouter\n"
+            "        # expects the request-kwargs shape and mutates messages in place.\n"
+            "        _summary_kwargs = {\"messages\": api_messages}\n"
+            "        sanitize_for_agentrouter(\n"
+            '            _summary_kwargs, getattr(agent, "provider", ""),\n'
+            '            base_url=getattr(agent, "base_url", "") or "",\n'
             "        )\n"
+            "        api_messages = _summary_kwargs[\"messages\"]\n"
         )
         helpers = helpers[:ins] + inject + helpers[ins:]
         changed.append("helpers:summary-site")

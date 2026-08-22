@@ -1,13 +1,8 @@
-"""agentrouter-toolkit — Hermes plugin surface.
+"""agentrouter-toolkit — Hermes plugin visible surface.
 
-Read-only visibility + convenience. The actual healing is done by the
-systemd user guard (installed via install.sh); this plugin NEVER mutates
-core files (policy: plugins must not touch core). It exposes:
-
-    hermes agentrouter status   — layers / guard / fallback / last-heal
-
-Install (as a user plugin):
-    ln -s ~/Projects/agentrouter-toolkit ~/.hermes/plugins/agentrouter-toolkit
+Read-only visibility: ``hermes agentrouter status``. Never mutates core
+files (policy: plugins must not touch core). The healing itself is done
+by the systemd user guard installed via install.sh.
 """
 
 from __future__ import annotations
@@ -19,7 +14,6 @@ from pathlib import Path
 
 PRODUCT_ROOT = Path(__file__).resolve().parent
 HERMES_HOME = Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes")
-REPO = HERMES_HOME / "hermes-agent"
 STATE_DIR = Path(
     os.environ.get("AGENTROUTER_GUARD_STATE")
     or os.environ.get("XDG_STATE_HOME")
@@ -38,7 +32,8 @@ def _layers_ok() -> tuple[bool, str]:
             capture_output=True, text=True, timeout=60,
         )
         ok = "all agentrouter layers present" in out.stdout
-        return ok, out.stdout.strip().splitlines()[-1] if out.stdout.strip() else out.stderr[:120]
+        last = out.stdout.strip().splitlines()[-1] if out.stdout.strip() else out.stderr[:120]
+        return ok, last
     except Exception as exc:
         return False, f"check failed: {exc}"
 
@@ -55,12 +50,12 @@ def _guard_info() -> str:
     last = "no heals yet"
     if LOG.exists():
         try:
-            lines = [
+            events = [
                 ln for ln in LOG.read_text(encoding="utf-8").splitlines()
                 if "layers missing" in ln or "VERIFIED" in ln
             ]
-            if lines:
-                last = lines[-1][:100]
+            if events:
+                last = events[-1][:100]
         except Exception:
             pass
     return f"timer: {state} | last event: {last}"
@@ -76,42 +71,56 @@ def _fallback_info() -> str:
         if chain:
             first = chain[0]
             return f"armed: {first.get('model')} via {first.get('provider')}"
-        return "NOT armed — stalls will surface as empty replies (run: hermes fallback add)"
+        return "NOT armed — stalls surface as empty replies (run: hermes fallback add)"
     except Exception as exc:
         return f"unreadable: {exc}"
 
 
 def status_text() -> str:
     ok, detail = _layers_ok()
-    lines = [
+    return "\n".join([
         "agentrouter-toolkit status",
         f"  layers  : {'✓ present' if ok else '✗ MISSING'} ({detail})",
         f"  guard   : {_guard_info()}",
         f"  fallback: {_fallback_info()}",
         f"  checked : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-    ]
-    return "\n".join(lines)
+    ])
 
 
 def register_cli(subparser) -> None:
-    """Wire `hermes agentrouter` (status only — healing stays with the guard)."""
-    p = subparser.add_parser(
-        "agentrouter",
-        help="agentrouter-toolkit: show compatibility-layer status",
+    """setup_fn for the plugin CLI contract.
+
+    The core passes the ``agentrouter`` subparser itself (already created
+    from register_cli_command's name), so attach the ``status`` subcommand
+    via its own add_subparsers.
+    """
+    sub = subparser.add_subparsers(dest="agentrouter_cmd")
+    p = sub.add_parser(
+        "status",
+        help="agentrouter compatibility layers / guard / fallback summary",
     )
-    sub = p.add_subparsers(dest="agentrouter_cmd")
-    sub.add_parser("status", help="layers / guard / fallback summary")
+    p.set_defaults(_agentrouter_status=True)
 
-    def _run(args):
-        print(status_text())
-        return 0
 
-    p.set_defaults(func=_run)
+def handle_status(args) -> int:
+    """handler_fn: print the status report."""
+    print(status_text())
+    return 0
 
 
 def register(ctx) -> None:
-    """Plugin entry point. Visibility only — no core mutation."""
+    """Plugin entry point. Visibility only — never mutates core files.
+
+    Real core signature (hermes_cli/plugins.py):
+        register_cli_command(name, help, setup_fn, handler_fn=None, description="")
+    """
     try:
-        ctx.register_cli_command("agentrouter", register_cli)
+        ctx.register_cli_command(
+            "agentrouter",
+            "agentrouter compatibility layers status",
+            register_cli,
+            handler_fn=handle_status,
+            description="Show agentrouter-toolkit layer/guard/fallback status",
+        )
     except Exception:
-        pass  # CLI registration is best-effort; status_text stays importable
+        pass  # best-effort: status_text stays importable regardless
