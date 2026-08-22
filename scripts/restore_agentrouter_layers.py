@@ -53,8 +53,12 @@ LAYERS = [
         or "except ImportError:" in HELPERS.read_text(encoding="utf-8")
     )),
     ("dumper defined", lambda: "def _maybe_dump_agentrouter_payload(" in HELPERS.read_text(encoding="utf-8")),
-    ("dispatch site", lambda: re.search(r"def _dispatch_nonstreaming_api_request.*?_maybe_dump_agentrouter_payload\(.*?sanitize_for_agentrouter\(", HELPERS.read_text(encoding="utf-8"), re.DOTALL)),
-    ("stream site", lambda: re.search(r"def _open_stream.*?sanitize_for_agentrouter\(", HELPERS.read_text(encoding="utf-8"), re.DOTALL)),
+    ("dispatch site", lambda: re.search(
+        r"def _dispatch_nonstreaming_api_request.*?_maybe_dump_agentrouter_payload\(.*?(sanitize_for_agentrouter\(|_sanitize_if_available\()",
+        HELPERS.read_text(encoding="utf-8"), re.DOTALL)),
+    ("stream site", lambda: re.search(
+        r"def _open_stream.*?(sanitize_for_agentrouter\(|_sanitize_if_available\()",
+        HELPERS.read_text(encoding="utf-8"), re.DOTALL)),
     # summary site: accepts either the legacy direct-list call or the newer
     # wrapped-dict form (_summary_kwargs) — both are valid restorations.
     ("summary site", lambda: re.search(
