@@ -155,19 +155,36 @@ def apply() -> int:
     # 2) helpers: import + dumper + three sites + guard
     helpers = HELPERS.read_text(encoding="utf-8")
     if "sanitize_for_agentrouter,\n)" not in helpers:
+        # Hardened import: when the sanitizer module is later wiped by an
+        # update, non-agentrouter providers keep working (graceful no-op)
+        # instead of crashing every model call with ImportError.
         ok = replace_first(
             "from agent.message_sanitization import (\n"
             "    _sanitize_surrogates,\n"
             "    _repair_tool_call_arguments,\n"
             ")",
-            "from agent.message_sanitization import (\n"
-            "    _sanitize_surrogates,\n"
-            "    _repair_tool_call_arguments,\n"
-            "    sanitize_for_agentrouter,\n"
-            ")",
+            "try:\n"
+            "    from agent.message_sanitization import (\n"
+            "        _sanitize_surrogates,\n"
+            "        _repair_tool_call_arguments,\n"
+            "        sanitize_for_agentrouter,\n"
+            "    )\n"
+            "except ImportError:\n"
+            "    _sanitize_surrogates = None\n"
+            "    _repair_tool_call_arguments = None\n"
+            "    sanitize_for_agentrouter = None\n"
+            "\n"
+            "\n"
+            "def _sanitize_if_available(kwargs_or_msgs, provider, base_url=\"\"):\n"
+            "    \"\"\"No-op when the sanitizer layer is absent.\"\"\"\n"
+            "    if sanitize_for_agentrouter is None:\n"
+            "        return kwargs_or_msgs\n"
+            "    return sanitize_for_agentrouter(kwargs_or_msgs, provider, base_url=base_url)",
         )
         if ok:
             changed.append("helpers:import")
+    if "_sanitize_if_available" not in helpers:
+        pass  # wrapper arrived with the hardened import above
     if "def _maybe_dump_agentrouter_payload(" not in helpers:
         dumper = '''
 # --- agentrouter.org debug payload dumper -----------------------------------
