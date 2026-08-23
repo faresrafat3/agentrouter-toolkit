@@ -45,6 +45,7 @@ DUMPER_ANCHOR = '_OPENROUTER_PROVIDER_SORT_VALUES = {"throughput", "latency", "p
 
 
 RUN_AGENT = REPO / "run_agent.py"
+_HERMES_HOME = Path(os.environ.get("HERMES_HOME") or str(Path.home() / ".hermes"))
 
 
 def _credits_gate_present() -> bool:
@@ -60,6 +61,38 @@ def _credits_gate_present() -> bool:
     return ("nousresearch.com" in text
             and "_credits_notices_enabled" in text
             and "return False" in text)
+
+
+
+
+def _inf_timeouts_present() -> bool:
+    """True when every agentrouter-* provider has inf stale/request timeouts.
+
+    agentrouter fronts slow reasoning models (opus-class thinking for
+    minutes) and stalls intermittently; Hermes defaults (90-300s stale,
+    120s read, 1800s request) kill healthy long generations. 'inf' is the
+    officially supported value (_coerce_timeout parses float('inf')) and
+    disarms every watchdog for these providers."""
+    try:
+        import yaml
+
+        cfg = yaml.safe_load((_HERMES_HOME / "config.yaml").read_text(encoding="utf-8")) or {}
+    except Exception:
+        return False
+    provs = cfg.get("providers") or {}
+    ar = [k for k in provs if str(k).startswith("agentrouter")]
+    if not ar:
+        return True  # no agentrouter providers configured — nothing to enforce
+    for k in ar:
+        entry = provs.get(k) or {}
+        s = entry.get("stale_timeout_seconds")
+        r = entry.get("request_timeout_seconds")
+        try:
+            if float(s) != float("inf") or float(r) != float("inf"):
+                return False
+        except (TypeError, ValueError):
+            return False
+    return True
 
 
 # (name, probe) — all must hold for --check to pass.
@@ -84,6 +117,7 @@ LAYERS = [
         r"# Strip all remaining underscore-prefixed.*?(sanitize_for_agentrouter\(\s*api_messages|_summary_kwargs\[.messages.\])",
         HELPERS.read_text(encoding="utf-8"), re.DOTALL)),
     ("credits gate (run_agent)", lambda: _credits_gate_present()),
+    ("infinite timeouts", lambda: _inf_timeouts_present()),
     ("regression tests", lambda: TEST_NULL.exists() and "_iter_provider_stream_chunks" in TEST_NULL.read_text(encoding="utf-8")),
 ]
 
@@ -376,6 +410,36 @@ def _maybe_dump_agentrouter_payload(
             changed.append("run_agent:credits-gate")
         else:
             print("WARN: _credits_notices_enabled anchor missing — credits gate NOT restored")
+
+    # 4) config: infinite stale/request timeouts on agentrouter providers
+    if not _inf_timeouts_present():
+        try:
+            import yaml as _yaml
+
+            cfg_path = _HERMES_HOME / "config.yaml"
+            cfg = _yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+            provs = cfg.get("providers") or {}
+            fixed = []
+            for k, entry in provs.items():
+                if not str(k).startswith("agentrouter") or not isinstance(entry, dict):
+                    continue
+                entry["stale_timeout_seconds"] = float("inf")
+                entry["request_timeout_seconds"] = float("inf")
+                fixed.append(k)
+            if fixed:
+                # round-trip through hermes config set so the YAML stays canonical
+                for k in fixed:
+                    subprocess.run(
+                        ["hermes", "config", "set",
+                         f"providers.{k}.stale_timeout_seconds", "inf"],
+                        capture_output=True, timeout=30)
+                    subprocess.run(
+                        ["hermes", "config", "set",
+                         f"providers.{k}.request_timeout_seconds", "inf"],
+                        capture_output=True, timeout=30)
+                changed.append(f"config:inf-timeouts({','.join(fixed)})")
+        except Exception as exc:
+            print("WARN: inf-timeout restore failed:", exc)
 
     restore_regression_tests(changed)
 
