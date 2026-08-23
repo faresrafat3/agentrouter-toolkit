@@ -43,6 +43,25 @@ ASSET_DEFANG = SKILL_DIR / "assets" / "test_agentrouter_filter_defang.py"
 SANITIZER_START = "# agentrouter.org content filters — single owner"
 DUMPER_ANCHOR = '_OPENROUTER_PROVIDER_SORT_VALUES = {"throughput", "latency", "price"}'
 
+
+RUN_AGENT = REPO / "run_agent.py"
+
+
+def _credits_gate_present() -> bool:
+    """True when run_agent.py suppresses credits notices on non-Nous targets.
+
+    Without this gate, a depleted Nous grant lingers in retained state and
+    shows a false 'Credit access paused' banner over working agentrouter
+    models (live incident 2026-08-22/23)."""
+    try:
+        text = RUN_AGENT.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    return ("nousresearch.com" in text
+            and "_credits_notices_enabled" in text
+            and "return False" in text)
+
+
 # (name, probe) — all must hold for --check to pass.
 LAYERS = [
     ("sanitizer module", lambda: "def sanitize_for_agentrouter(" in SANIT.read_text(encoding="utf-8")),
@@ -64,7 +83,7 @@ LAYERS = [
     ("summary site", lambda: re.search(
         r"# Strip all remaining underscore-prefixed.*?(sanitize_for_agentrouter\(\s*api_messages|_summary_kwargs\[.messages.\])",
         HELPERS.read_text(encoding="utf-8"), re.DOTALL)),
-    ("null-chunk guard", lambda: re.search(r"def _iter_provider_stream_chunks.*?if chunk is None:", HELPERS.read_text(encoding="utf-8"), re.DOTALL)),
+    ("credits gate (run_agent)", lambda: _credits_gate_present()),
     ("regression tests", lambda: TEST_NULL.exists() and "_iter_provider_stream_chunks" in TEST_NULL.read_text(encoding="utf-8")),
 ]
 
@@ -324,6 +343,40 @@ def _maybe_dump_agentrouter_payload(
             changed.append("helpers:null-guard")
         else:
             print("WARN: null-chunk guard NOT restored — iterator shapes A/B not found; needs manual merge")
+    # 3) run_agent.py: credits-notices wire-target gate
+    if not _credits_gate_present():
+        ra_text = RUN_AGENT.read_text(encoding="utf-8")
+        anchor = "    def _credits_notices_enabled(self) -> bool:"
+        if anchor in ra_text:
+            injected_gate = (
+                "    def _credits_notices_enabled(self) -> bool:\n"
+                "        \"\"\"Credits notices only while the active target is Nous.\n\n"
+                "        A third-party relay (agentrouter.org) neither consumes Nous\n"
+                "        credits nor sends x-nous-credits-* headers, so a stale depleted\n"
+                "        flag from an earlier Nous turn must not show a false\n"
+                "        'Credit access paused' banner over a working non-Nous model.\n"
+                "        \"\"\"\n"
+                "        try:\n"
+                "            base_url = (getattr(self, \"base_url\", \"\") or \"\")\n"
+                "            if base_url and \"nousresearch.com\" not in base_url:\n"
+                "                return False\n"
+                "        except Exception:\n"
+                "            pass\n"
+                "        try:\n"
+                "            from hermes_cli.config import load_config as _load_config\n"
+                "            _cfg = _load_config() or {}\n"
+                "            _display = _cfg.get(\"display\") if isinstance(_cfg, dict) else None\n"
+                "            if isinstance(_display, dict):\n"
+                "                return bool(_display.get(\"credits_notices\", True))\n"
+                "        except Exception:\n"
+                "            return True\n"
+            )
+            ra_text = ra_text.replace(anchor, injected_gate, 1)
+            RUN_AGENT.write_text(ra_text, encoding="utf-8")
+            changed.append("run_agent:credits-gate")
+        else:
+            print("WARN: _credits_notices_enabled anchor missing — credits gate NOT restored")
+
     restore_regression_tests(changed)
 
     if changed and any(c.startswith("helpers:") for c in changed):

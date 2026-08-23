@@ -2,7 +2,7 @@ name: agentrouter-toolkit
 version: 0.1.0
 description: "Self-healing agentrouter.org compatibility for Hermes — sanitizer, null-chunk guard, update-proof auto-restore. Status CLI: hermes agentrouter status"
 author: Fares + Hermes Agent
-kind: plugin
+kind: standalone
 api: plugin_api.py
 tags:
   - providers
