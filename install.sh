@@ -9,6 +9,15 @@ set -euo pipefail
 PRODUCT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
 SYSTEMD_DIR="$HOME/.config/systemd/user"
+# Safety: refuse to touch live systemd if HERMES_HOME points elsewhere (test isolation)
+_REAL_HOME="${HERMES_HOME:-$HOME/.hermes}"
+if [ "$_REAL_HOME" != "$HOME/.hermes" ]; then
+    echo "⚠  HERMES_HOME=$_REAL_HOME is not the default — skipping systemd install"
+    echo "   (guard timer NOT installed; run install.sh without HERMES_HOME to install it)"
+    SKIP_SYSTEMD=1
+else
+    SKIP_SYSTEMD=0
+fi
 
 echo "── agentrouter-toolkit installer ─────────────────────────────"
 echo "   product root : $PRODUCT_ROOT"
@@ -21,6 +30,9 @@ echo ""
 command -v systemctl >/dev/null || { echo "✗ systemd not available"; exit 1; }
 
 # 2) install systemd units + guard script
+if [ "$SKIP_SYSTEMD" = "1" ]; then
+    echo "ℹ  Layers will still be restored; guard timer not installed for non-default HERMES_HOME"
+else
 mkdir -p "$SYSTEMD_DIR"
 install -m 755 "$PRODUCT_ROOT/scripts/agentrouter-guard.sh" "$SYSTEMD_DIR/agentrouter-guard.sh"
 install -m 644 "$PRODUCT_ROOT/systemd/agentrouter-guard.service" "$SYSTEMD_DIR/"
@@ -30,6 +42,9 @@ sed -i "s|^PRODUCT_ROOT=.*|PRODUCT_ROOT=\"$PRODUCT_ROOT\"|" "$SYSTEMD_DIR/agentr
 sed -i "s|^ExecStart=.*|ExecStart=$PRODUCT_ROOT/scripts/agentrouter-guard.sh|" "$SYSTEMD_DIR/agentrouter-guard.service"
 systemctl --user daemon-reload
 systemctl --user enable --now agentrouter-guard.timer >/dev/null 2>&1 || true
+fi
+# Enable the visibility plugin so `hermes agentrouter status` works
+hermes plugins enable agentrouter-toolkit >/dev/null 2>&1 || true
 echo "✓ guard timer installed and enabled (every 10 min + at login)"
 
 # 3) restore any missing layers right now (uses skill-asset sources)
