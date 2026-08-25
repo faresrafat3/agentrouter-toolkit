@@ -29,12 +29,14 @@ version: "1"
    child's output matches the task via `git status` / acceptance. Children DRIFT (see Pitfalls).
 6. **Verify completion yourself:** run `make test` + `make audit` (or require the executor to attach
    green evidence) before any merge. Law 9: human oversight is required.
-7. **Parallelism + failover:** register ALL keys under ONE provider
-   (`agentrouter-org`) via a single comma-separated `key_env` var, so the credential
-   pool rotates between keys automatically when one is exhausted (HTTP 429/402). Do NOT
-   register 3 separate providers (`agentrouter-org-1/2/3`) — Hermes failover only works
-   INSIDE one provider's pool, not between providers. See Pitfalls → MULTI-KEY FAILOVER
-   and references/agentrouter_multikey_failover.md.
+7. **Multiple keys — SUPERSEDED (Fares, 2026-08-23):** the three AgentRouter keys are
+   three DIFFERENT accounts with independent balances, registered deliberately as
+   separate providers `providers.agentrouter-1/2/3` so Fares can MANUALLY SWITCH when
+   one account runs dry. Do NOT advise merging them into one comma-separated pool.
+   Check which key has funds BEFORE switching:
+   `python3 ~/Projects/agentrouter-toolkit/scripts/agentrouter-balance.py`
+   (large pre-consume probe; a tiny completion passes even on a $0.02 residual —
+   see references/agentrouter_key_verification.md Probe 2 correction).
 
 # Root cause of EVERY disappearance (verified 2026-08-22): `hermes update`
 # resets this checkout to origin/main; local agentrouter fixes lived as
